@@ -138,19 +138,47 @@ async def handler(event):
         except Exception as e:
             await bot.send_message(chat_id, f"⚠️ An error occurred: {e}")
 
-# --- Runner ---
+# --- Runner with Startup Protection ---
 async def start_services():
     # Start the Flask health check in a background thread
+    # This keeps Koyeb happy while the bot waits for the FloodWait
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # Start both Telegram clients
-    await bot.start(bot_token=BOT_TOKEN)
-    await user.start()
-    
-    print("Health check running on port 8000.")
-    print("Telegram Bot is active. Send /start to begin.")
-    
+    print("Health check server started on port 8000.")
+
+    # Startup logic for Bot Client
+    while True:
+        try:
+            print("Attempting to start Bot Client...")
+            await bot.start(bot_token=BOT_TOKEN)
+            break # Exit loop if successful
+        except FloodWaitError as e:
+            print(f"⚠️ Startup FloodWait: Telegram requires a wait of {e.seconds} seconds.")
+            print("The script will stay alive and wait. Do not restart the instance.")
+            await asyncio.sleep(e.seconds + 5) # Wait the required time plus a safety margin
+        except Exception as e:
+            print(f"❌ Unexpected error during Bot startup: {e}")
+            await asyncio.sleep(30) # Wait before retrying other errors
+
+    # Startup logic for User Client
+    while True:
+        try:
+            print("Attempting to start User Client...")
+            await user.start()
+            break # Exit loop if successful
+        except FloodWaitError as e:
+            print(f"⚠️ User Client FloodWait: Waiting {e.seconds} seconds.")
+            await asyncio.sleep(e.seconds + 5)
+        except Exception as e:
+            print(f"❌ Unexpected error during User startup: {e}")
+            await asyncio.sleep(30)
+
+    print("✅ All systems go! Telegram Bot is active. Send /start to begin.")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    asyncio.run(start_services())
+    # Fixed the loop logic for Python 3.10+
+    try:
+        asyncio.run(start_services())
+    except KeyboardInterrupt:
+        print("Bot stopped by user.")
