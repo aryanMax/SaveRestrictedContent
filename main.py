@@ -37,6 +37,15 @@ def format_bytes(size):
             return f"{size:.2f} {unit}"
         size /= 1024.0
 
+def parse_message_id(input_text):
+    """Extracts the message ID whether it's a raw number or a Telegram link."""
+    text = input_text.strip()
+    if '/' in text:
+        text = text.split('/')[-1] # Gets the last part of the URL
+    if '?' in text:
+        text = text.split('?')[0]  # Removes things like '?single'
+    return int(text)
+
 async def progress_bar(current, total, msg, action, start_time, last_update):
     now = time.time()
     if (now - last_update[0]) < 5 and current < total:
@@ -111,7 +120,8 @@ async def start_handler(event):
         await bot.send_message(chat_id, "⚠️ **User Client is not logged in!**\nCheck Koyeb logs or String Session.")
         return
 
-    async with bot.conversation(chat_id) as conv:
+    # Timeout increased to 300 seconds (5 minutes)
+    async with bot.conversation(chat_id, timeout=300) as conv:
         try:
             # 1. Source Channel
             src_id = await select_channel(conv, "📂 **SOURCE CHANNEL**")
@@ -142,14 +152,18 @@ async def start_handler(event):
                     if m.media: messages_to_copy.append(m)
                     
             elif mode == '2':
-                await conv.send_message("🆔 Enter the exact Message ID:")
-                m_id = int((await conv.get_response()).text.strip())
+                await conv.send_message("🆔 Enter the exact **Message ID** or **Message Link**:")
+                m_input = (await conv.get_response()).text.strip()
+                m_id = parse_message_id(m_input)
+                
                 m = await user.get_messages(src_id, ids=m_id)
                 if m and m.media: messages_to_copy.append(m)
                 
             elif mode == '3':
-                await conv.send_message("🆔 Enter the STARTING Message ID:\n*(This message and everything posted after it will be copied)*")
-                m_id = int((await conv.get_response()).text.strip())
+                await conv.send_message("🆔 Enter the STARTING **Message ID** or **Message Link**:\n*(This message and everything posted after it will be copied)*")
+                m_input = (await conv.get_response()).text.strip()
+                m_id = parse_message_id(m_input)
+                
                 await conv.send_message("🔍 Scanning channel downwards from that message...")
                 # min_id=m_id-1 grabs the message itself and all newer messages
                 async for m in user.iter_messages(src_id, reverse=True, min_id=m_id - 1):
@@ -182,7 +196,7 @@ async def start_handler(event):
             await bot.send_message(chat_id, "🏁 **Transfer Complete!**")
         
         except asyncio.TimeoutError:
-            await conv.send_message("⏳ **Conversation timed out.** Please type `/start` again.")
+            await conv.send_message("⏳ **Conversation timed out (5 minutes passed).** Please type `/start` again when you are ready.")
         except Exception as e:
             await bot.send_message(chat_id, f"⚠️ **An error occurred:** {e}")
 
@@ -215,11 +229,4 @@ async def start_services():
             await asyncio.sleep(e.seconds + 5)
         except Exception as e:
             print(f"❌ USER SESSION ERROR: {e}")
-            await asyncio.sleep(30)
-
-    print("🚀 Bot is ready. Send /start on Telegram.")
-    await bot.run_until_disconnected()
-
-if __name__ == '__main__':
-    try: asyncio.run(start_services())
-    except KeyboardInterrupt: pass
+            await asyncio.sleep(
