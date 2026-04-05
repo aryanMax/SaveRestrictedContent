@@ -1,20 +1,36 @@
+import os
+import time
+import asyncio
+import threading
+from flask import Flask
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
-import asyncio
-import time
-import os
 
-# --- Your Credentials ---
+# --- Flask Server for Koyeb Health Checks ---
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "Bot is alive and running!", 200
+
+def run_flask():
+    # Koyeb passes the port via environment variable, defaults to 8000
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host='0.0.0.0', port=port)
+
+# --- User Credentials ---
 API_ID = 12155241
 API_HASH = '5d4fb21990c47b88df74dc1611a07483'
 STRING_SESSION = '1AZWarzYBu5ylu1u3Ra81TEtn3h6b5Z2VebwueLMh8Ay-kSXrZHKAZ-HJDCvourbbbiu1UZvOvUp4jK5TrjEXZr1-zKKG6T_xMQLA_fi7BzXOegB_ib7evsw7qeJvpoHjXFV7HFHrNENGppXxSY_QvJk0swDVrcwTqREsjSsrXV7fWkLaoHbzPAWBbM_aEoOXk7pA3H4gCWoyeBDllLrbFpGSF6ZH1Y0ZS9qFDz32Rn-BRjAnPZWo72BK2bBJz4UF5UbXpjr6igLDytrmATPPFDfdlsAnTTs4rYqpGM0hBKatAFxEEt1WmEsWVdfh27eo-AckQLbJl2-fIvyXdwYhSTEs62tMevQ='
 BOT_TOKEN = '8498132641:AAE-SV9DyRcn30SnTxC5CBjHc2F9XxswTag'
 
-# --- Initialization ---
+# --- Client Initialization ---
+# 'bot' handles user interaction; 'user' handles the restricted file movement
 bot = TelegramClient('bot_session', API_ID, API_HASH)
 user = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 
+# --- Helpers ---
 def format_bytes(size):
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size < 1024.0:
@@ -23,7 +39,8 @@ def format_bytes(size):
 
 async def progress_bar(current, total, msg, action, start_time, last_update):
     now = time.time()
-    if (now - last_update[0]) < 4 and current < total:
+    # Update every 5 seconds to avoid Telegram's message-edit rate limits
+    if (now - last_update[0]) < 5 and current < total:
         return
     last_update[0] = now
     
@@ -34,71 +51,106 @@ async def progress_bar(current, total, msg, action, start_time, last_update):
     
     status_text = (f"**{action}**\n`{bar}` {percentage:.1f}%\n"
                    f"🚀 Speed: {format_bytes(speed)}/s\n"
-                   f"📦 Done: {format_bytes(current)} / {format_bytes(total)}")
+                   f"📦 Processed: {format_bytes(current)} / {format_bytes(total)}")
     try:
         await msg.edit(status_text)
     except:
         pass
 
+# --- Bot Commands ---
 @bot.on(events.NewMessage(pattern='/start'))
 async def handler(event):
-    async with bot.conversation(event.chat_id) as conv:
-        await conv.send_message("📌 **Step 1:** Copy entire channel or specific files?\nReply `1` for All, `2` for Single ID.")
-        mode = (await conv.get_response()).text
-        
-        await conv.send_message("📌 **Step 2:** Enter Source Channel ID (include -100):")
-        src = int((await conv.get_response()).text)
-        
-        await conv.send_message("📌 **Step 3:** Enter Destination Channel ID (include -100):")
-        dst = int((await conv.get_response()).text)
+    chat_id = event.chat_id
+    async with bot.conversation(chat_id) as conv:
+        try:
+            # 1. Mode Selection
+            await conv.send_message("🛠 **Select Mode:**\nReply `1` for Entire Channel\nReply `2` for Single Message ID")
+            mode = (await conv.get_response()).text.strip()
+            
+            # 2. Source Channel
+            await conv.send_message("📂 **Source:** Enter Source Channel ID (e.g., -100123456789):")
+            src_id = int((await conv.get_response()).text.strip())
+            
+            # 3. Destination Channel
+            await conv.send_message("🎯 **Destination:** Enter Destination Channel ID:")
+            dst_id = int((await conv.get_response()).text.strip())
 
-        source_entity = await user.get_entity(src)
-        restricted = getattr(source_entity, 'noforwards', False)
-        
-        msgs = []
-        if mode == '1':
-            async for m in user.iter_messages(src, reverse=True):
-                if m.media: msgs.append(m)
-        else:
-            await conv.send_message("Enter Message ID:")
-            m_id = int((await conv.get_response()).text)
-            m = await user.get_messages(src, ids=m_id)
-            if m and m.media: msgs.append(m)
+            # Detect Restrictions
+            source_entity = await user.get_entity(src_id)
+            is_restricted = getattr(source_entity, 'noforwards', False)
+            
+            messages_to_copy = []
+            if mode == '1':
+                await conv.send_message("🔍 Scanning channel for media...")
+                async for m in user.iter_messages(src_id, reverse=True):
+                    if m.media: messages_to_copy.append(m)
+            else:
+                await conv.send_message("🆔 Enter the Message ID:")
+                m_id = int((await conv.get_response()).text.strip())
+                m = await user.get_messages(src_id, ids=m_id)
+                if m and m.media: messages_to_copy.append(m)
 
-        await conv.send_message(f"✅ Found {len(msgs)} files. Starting transfer...")
+            if not messages_to_copy:
+                await conv.send_message("❌ No media found to copy.")
+                return
 
-        for i, m in enumerate(msgs, 1):
-            status = await bot.send_message(event.chat_id, f"Processing {i}/{len(msgs)}...")
-            try:
-                if restricted:
-                    # Download -> Upload (Preserves Thumbnails/Formats)
-                    start = time.time()
-                    last = [start]
-                    path = await user.download_media(m, progress_callback=lambda c, t: progress_bar(c, t, status, "Downloading", start, last))
+            await conv.send_message(f"✅ Found {len(messages_to_copy)} files. Starting transfer...")
+
+            for i, m in enumerate(messages_to_copy, 1):
+                status_msg = await bot.send_message(chat_id, f"Processing file {i}/{len(messages_to_copy)}...")
+                try:
+                    if is_restricted:
+                        # Restriction Handling: Download then Upload
+                        start_time = time.time()
+                        last_upd = [start_time]
+                        
+                        path = await user.download_media(
+                            m, 
+                            progress_callback=lambda c, t: progress_bar(c, t, status_msg, f"Downloading {i}", start_time, last_upd)
+                        )
+                        
+                        start_time = time.time()
+                        last_upd = [start_time]
+                        await user.send_file(
+                            dst_id, 
+                            path, 
+                            caption=m.text, 
+                            progress_callback=lambda c, t: progress_bar(c, t, status_msg, f"Uploading {i}", start_time, last_upd)
+                        )
+                        
+                        if os.path.exists(path):
+                            os.remove(path) # Clear disk space on Koyeb
+                    else:
+                        # Standard Forwarding
+                        await user.forward_messages(dst_id, m)
                     
-                    start = time.time()
-                    last = [start]
-                    await user.send_file(dst, path, caption=m.text, thumb=path if path.endswith(('.jpg', '.png')) else None, 
-                                        progress_callback=lambda c, t: progress_bar(c, t, status, "Uploading", start, last))
-                    if os.path.exists(path): os.remove(path)
-                else:
-                    await user.forward_messages(dst, m)
+                    await status_msg.edit(f"✅ File {i} of {len(messages_to_copy)} transferred.")
+                    await asyncio.sleep(2) # Prevent flood waits
                 
-                await status.edit(f"✅ Completed file {i}")
-                await asyncio.sleep(2)
-            except FloodWaitError as e:
-                await bot.send_message(event.chat_id, f"⚠️ Rate limit! Sleeping {e.seconds}s")
-                await asyncio.sleep(e.seconds)
-            except Exception as e:
-                await bot.send_message(event.chat_id, f"❌ Error: {e}")
+                except FloodWaitError as e:
+                    await bot.send_message(chat_id, f"⚠️ Telegram Rate Limit! Sleeping for {e.seconds}s...")
+                    await asyncio.sleep(e.seconds)
+                except Exception as e:
+                    await bot.send_message(chat_id, f"❌ Failed to transfer file {i}: {e}")
 
-async def main():
+            await bot.send_message(chat_id, "🏁 **Transfer Complete!**")
+
+        except Exception as e:
+            await bot.send_message(chat_id, f"⚠️ An error occurred: {e}")
+
+# --- Runner ---
+async def start_services():
+    # Start the Flask health check in a background thread
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Start both Telegram clients
     await bot.start(bot_token=BOT_TOKEN)
     await user.start()
-    print("Bot is live on Koyeb!")
+    
+    print("Health check running on port 8000.")
+    print("Telegram Bot is active. Send /start to begin.")
+    
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
-    
+    asyncio.run(start_services())
