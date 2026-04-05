@@ -72,7 +72,7 @@ async def select_channel(conv, prompt_title):
     if search_term.lstrip('-').isdigit():
         entity_id = int(search_term)
         try:
-            # Force Telethon to cache the entity to prevent "PeerUser" errors
+            # Force Telethon to cache the entity to prevent errors
             await user.get_entity(entity_id)
             return entity_id
         except Exception as e:
@@ -188,7 +188,8 @@ async def start_handler(event):
                     if m.media: messages_to_copy.append(m)
 
             if not messages_to_copy:
-                await conv.send_message("❌ No media found in that range."); return
+                await conv.send_message("❌ No media found in that range.")
+                return
 
             # --- THE SPEED ENGINES ---
             if not is_restricted:
@@ -258,4 +259,34 @@ async def start_services():
     print("✅ Health check server live on port 8000.")
 
     print("Attempting to start Bot Client...")
-    await bot.start(
+    await bot.start(bot_token=BOT_TOKEN)
+    print("✅ Bot Client is Online.")
+
+    session_to_use = STRING_SESSION
+    if os.path.exists("session.txt"):
+        with open("session.txt", "r") as f:
+            saved_session = f.read().strip()
+            if saved_session:
+                session_to_use = saved_session
+
+    try:
+        print("Attempting to connect User Client...")
+        user = TelegramClient(StringSession(session_to_use), API_ID, API_HASH)
+        await user.connect()
+        
+        if await user.is_user_authorized():
+            print("✅ User Client (Worker) is Online and Authorized.")
+        else:
+            print("⚠️ User Session is invalid. Bot will ask for a new one via /start.")
+    except Exception as e:
+        print(f"⚠️ USER SESSION ERROR: {e}")
+        print("⚠️ Bot will ask for a new session via /start.")
+
+    print("🚀 Bot is ready. Send /start on Telegram.")
+    await bot.run_until_disconnected()
+
+if __name__ == '__main__':
+    try: 
+        asyncio.run(start_services())
+    except KeyboardInterrupt: 
+        pass
