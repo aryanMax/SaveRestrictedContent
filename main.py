@@ -24,7 +24,7 @@ API_HASH = '5d4fb21990c47b88df74dc1611a07483'
 BOT_TOKEN = '8498132641:AAE-SV9DyRcn30SnTxC5CBjHc2F9XxswTag'
 
 # You can paste your string session here later to skip the /login step on future restarts
-STRING_SESSION = '' 
+STRING_SESSION = '1AZWarzkBuwgN4VaU0uTtr1QyMzMcR7g7aPuFeQscmSpdYw7Iquk3_JI1XxE4eUzHRGnOXhAW8tMLzNfVu8eLB7yLqjs69bWP6ML3pvQpjrQOi9aIMs39WAhfFEPrkMIyvI_JAtD4-zrjWVlh9KqmnWX4XXfhpz2276mJWW8cevVhkKBSnv3YXgVjAjNliS3zy1TTQO08wXw-efD0iMHyxo6Q9fvp1kEeUOPBqfLbRIfxKIgQjHCUANR46aepz9hm_Sq7j6VIu8wqM_jlbXA7z0upsswXyiKY3gA8HtSXxdXlrMKh9sv6u9xUSZILFAD9uAgN-fByvPR71lTuvwqdgRTQH2LOzHg=' 
 
 # --- Client Initialization ---
 bot = TelegramClient('bot_session', API_ID, API_HASH)
