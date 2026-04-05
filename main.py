@@ -22,7 +22,8 @@ def run_flask():
 # --- User Credentials ---
 API_ID = 12155241
 API_HASH = '5d4fb21990c47b88df74dc1611a07483'
-STRING_SESSION = '1AZWarzYBu5ylu1u3Ra81TEtn3h6b5Z2VebwueLMh8Ay-kSXrZHKAZ-HJDCvourbbbiu1UZvOvUp4jK5TrjEXZr1-zKKG6T_xMQLA_fi7BzXOegB_ib7evsw7qeJvpoHjXFV7HFHrNENGppXxSY_QvJk0swDVrcwTqREsjSsrXV7fWkLaoHbzPAWBbM_aEoOXk7pA3H4gCWoyeBDllLrbFpGSF6ZH1Y0ZS9qFDz32Rn-BRjAnPZWo72BK2bBJz4UF5UbXpjr6igLDytrmATPPFDfdlsAnTTs4rYqpGM0hBKatAFxEEt1WmEsWVdfh27eo-AckQLbJl2-fIvyXdwYhSTEs62tMevQ='
+# Updated with your new 2FA-authorized string
+STRING_SESSION = '1AZWarzYBu398Gkv1Y_NaWPSBkolpWcmylFFp3Rx-5kQ15Hgwih-kfTRM9Q2QFlJlihIufHpvNnSVHf7-rfIs1IMjtxja2W46XAW0yy-OCXYAyV2OVVIqOiIMJVB9AvqA0YNJmV2YOerA2FWuj-hQdMzoqEsz1MpLF2DEC05btOMeNxpA4h7In4OGXw16i7LPNc0RHR7tUJw5vMnxs07TawDYReGcxv01teVrh7qmj-BQ4AomeqIivz8I2GT08Z5VwaR6tVeqcQ_xcpTYJdQEDzgCEZegXS0OhsxXlJp2vzINnMmRpc6p5U8D3CUfMu6hMLkTuuo_4z2JUXMa3ruf0nhdTni2YJc='
 BOT_TOKEN = '8498132641:AAE-SV9DyRcn30SnTxC5CBjHc2F9XxswTag'
 
 # --- Client Initialization ---
@@ -63,7 +64,7 @@ async def handler(event):
             mode = (await conv.get_response()).text.strip()
             
             await conv.send_message("📂 **Source:** Enter Source Channel ID (e.g., -100123456789):")
-            src_id = int((await conv.get_get_response()).text.strip())
+            src_id = int((await conv.get_response()).text.strip())
             
             await conv.send_message("🎯 **Destination:** Enter Destination Channel ID:")
             dst_id = int((await conv.get_response()).text.strip())
@@ -113,7 +114,7 @@ async def handler(event):
 
 # --- Runner with Startup Protection ---
 async def start_services():
-    # 1. Start Health Check IMMEDIATELY
+    # 1. Start Health Check server
     threading.Thread(target=run_flask, daemon=True).start()
     print("✅ Health check server live on port 8000.")
 
@@ -126,7 +127,7 @@ async def start_services():
         print(f"❌ CRITICAL: Bot startup failed: {e}")
         return
 
-    # 3. Start User Client with FloodWait protection
+    # 3. Start User Client (The Worker)
     while True:
         try:
             print("Attempting to start User Client...")
