@@ -48,8 +48,10 @@ async def progress_bar(current, total, msg, action, start_time, last_update):
     status_text = (f"**{action}**\n`{bar}` {percentage:.1f}%\n"
                    f"🚀 Speed: {format_bytes(speed)}/s\n"
                    f"📦 Processed: {format_bytes(current)} / {format_bytes(total)}")
-    try: await msg.edit(status_text)
-    except: pass
+    try:
+        await msg.edit(status_text)
+    except:
+        pass
 
 # --- Bot Commands ---
 @bot.on(events.NewMessage(pattern='/start'))
@@ -59,8 +61,10 @@ async def handler(event):
         try:
             await conv.send_message("🛠 **Select Mode:**\nReply `1` for Entire Channel\nReply `2` for Single Message ID")
             mode = (await conv.get_response()).text.strip()
+            
             await conv.send_message("📂 **Source:** Enter Source Channel ID (e.g., -100123456789):")
-            src_id = int((await conv.get_response()).text.strip())
+            src_id = int((await conv.get_get_response()).text.strip())
+            
             await conv.send_message("🎯 **Destination:** Enter Destination Channel ID:")
             dst_id = int((await conv.get_response()).text.strip())
 
@@ -89,45 +93,58 @@ async def handler(event):
                     if is_restricted:
                         start_time = time.time(); last_upd = [start_time]
                         path = await user.download_media(m, progress_callback=lambda c, t: progress_bar(c, t, status_msg, f"Downloading {i}", start_time, last_upd))
+                        
                         start_time = time.time(); last_upd = [start_time]
                         await user.send_file(dst_id, path, caption=m.text, progress_callback=lambda c, t: progress_bar(c, t, status_msg, f"Uploading {i}", start_time, last_upd))
+                        
                         if os.path.exists(path): os.remove(path)
                     else:
                         await user.forward_messages(dst_id, m)
+                    
                     await status_msg.edit(f"✅ File {i} transferred."); await asyncio.sleep(2)
                 except FloodWaitError as e:
                     await bot.send_message(chat_id, f"⚠️ Rate Limit! Sleeping {e.seconds}s..."); await asyncio.sleep(e.seconds)
                 except Exception as e:
                     await bot.send_message(chat_id, f"❌ Error: {e}")
+            
             await bot.send_message(chat_id, "🏁 **Transfer Complete!**")
-        except Exception as e: await bot.send_message(chat_id, f"⚠️ Error: {e}")
+        except Exception as e:
+            await bot.send_message(chat_id, f"⚠️ Error: {e}")
 
 # --- Runner with Startup Protection ---
 async def start_services():
+    # 1. Start Health Check IMMEDIATELY
     threading.Thread(target=run_flask, daemon=True).start()
-    print("Health check server started on port 8000.")
+    print("✅ Health check server live on port 8000.")
 
-    while True:
-        try:
-            print("Attempting to start Bot Client...")
-            await bot.start(bot_token=BOT_TOKEN); break
-        except FloodWaitError as e:
-            print(f"⚠️ Startup FloodWait: Waiting {e.seconds}s. DO NOT RESTART."); await asyncio.sleep(e.seconds + 5)
-        except Exception as e:
-            print(f"❌ Error: {e}"); await asyncio.sleep(30)
+    # 2. Start Bot Client
+    try:
+        print("Attempting to start Bot Client...")
+        await bot.start(bot_token=BOT_TOKEN)
+        print("✅ Bot Client is Online.")
+    except Exception as e:
+        print(f"❌ CRITICAL: Bot startup failed: {e}")
+        return
 
+    # 3. Start User Client with FloodWait protection
     while True:
         try:
             print("Attempting to start User Client...")
-            await user.start(); break
+            await user.start()
+            print("✅ User Client (Worker) is Online.")
+            break
         except FloodWaitError as e:
-            print(f"⚠️ User Client FloodWait: Waiting {e.seconds}s."); await asyncio.sleep(e.seconds + 5)
+            print(f"⚠️ Telegram FloodWait: Waiting {e.seconds}s. DO NOT RESTART.")
+            await asyncio.sleep(e.seconds + 5)
         except Exception as e:
-            print(f"❌ Error: {e}"); await asyncio.sleep(30)
+            print(f"❌ USER SESSION ERROR: {e}")
+            await asyncio.sleep(60)
 
-    print("✅ All systems go!")
+    print("🚀 ALL SYSTEMS ACTIVE. Send /start to your bot.")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    try: asyncio.run(start_services())
-    except KeyboardInterrupt: pass
+    try:
+        asyncio.run(start_services())
+    except KeyboardInterrupt:
+        pass
