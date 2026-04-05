@@ -5,7 +5,7 @@ import threading
 from flask import Flask
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodWaitError, SessionPasswordNeededError
 
 # --- Flask Server for Koyeb Health Checks ---
 app = Flask(__name__)
@@ -15,20 +15,20 @@ def health_check():
     return "Bot is alive and running!", 200
 
 def run_flask():
-    # Koyeb passes the port via environment variable, defaults to 8000
     port = int(os.environ.get("PORT", 8000))
     app.run(host='0.0.0.0', port=port)
 
 # --- User Credentials ---
 API_ID = 12155241
 API_HASH = '5d4fb21990c47b88df74dc1611a07483'
-# Updated with your new 2FA-authorized string
-STRING_SESSION = '1AZWarzYBu398Gkv1Y_NaWPSBkolpWcmylFFp3Rx-5kQ15Hgwih-kfTRM9Q2QFlJlihIufHpvNnSVHf7-rfIs1IMjtxja2W46XAW0yy-OCXYAyV2OVVIqOiIMJVB9AvqA0YNJmV2YOerA2FWuj-hQdMzoqEsz1MpLF2DEC05btOMeNxpA4h7In4OGXw16i7LPNc0RHR7tUJw5vMnxs07TawDYReGcxv01teVrh7qmj-BQ4AomeqIivz8I2GT08Z5VwaR6tVeqcQ_xcpTYJdQEDzgCEZegXS0OhsxXlJp2vzINnMmRpc6p5U8D3CUfMu6hMLkTuuo_4z2JUXMa3ruf0nhdTni2YJc='
 BOT_TOKEN = '8498132641:AAE-SV9DyRcn30SnTxC5CBjHc2F9XxswTag'
+
+# You can paste your string session here later to skip the /login step on future restarts
+STRING_SESSION = '' 
 
 # --- Client Initialization ---
 bot = TelegramClient('bot_session', API_ID, API_HASH)
-user = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+user = None # User client is initialized later
 
 # --- Helpers ---
 def format_bytes(size):
@@ -49,21 +49,68 @@ async def progress_bar(current, total, msg, action, start_time, last_update):
     status_text = (f"**{action}**\n`{bar}` {percentage:.1f}%\n"
                    f"🚀 Speed: {format_bytes(speed)}/s\n"
                    f"📦 Processed: {format_bytes(current)} / {format_bytes(total)}")
-    try:
-        await msg.edit(status_text)
-    except:
-        pass
+    try: await msg.edit(status_text)
+    except: pass
 
-# --- Bot Commands ---
-@bot.on(events.NewMessage(pattern='/start'))
-async def handler(event):
+# --- In-Chat Login Command ---
+@bot.on(events.NewMessage(pattern='/login'))
+async def login_handler(event):
+    global user
     chat_id = event.chat_id
+    
+    async with bot.conversation(chat_id) as conv:
+        try:
+            await conv.send_message("📱 **Step 1:** Enter your phone number with country code (e.g., +919876543210):")
+            phone = (await conv.get_response()).text.strip()
+            
+            # Initialize temp user client
+            user = TelegramClient(StringSession(), API_ID, API_HASH)
+            await user.connect()
+            
+            await user.send_code_request(phone)
+            
+            await conv.send_message("✉️ **Step 2:** Enter the 5-digit code Telegram just sent you.\n\n⚠️ **CRITICAL:** You MUST send it with spaces or dashes (e.g., `1 2 3 4 5`). If you send it normally, Telegram will instantly expire it!")
+            raw_code = (await conv.get_response()).text
+            # Clean the code to remove spaces and dashes
+            clean_code = raw_code.replace(' ', '').replace('-', '').strip()
+            
+            try:
+                await user.sign_in(phone, clean_code)
+            except SessionPasswordNeededError:
+                await conv.send_message("🔒 **Step 3:** Two-Step Verification Detected. Enter your password:")
+                pwd = (await conv.get_response()).text.strip()
+                await user.sign_in(password=pwd)
+            
+            new_string = user.session.save()
+            success_msg = (
+                "✅ **Login Successful! User Client is now ACTIVE.**\n\n"
+                "**IMPORTANT:** Here is your permanent String Session:\n\n"
+                f"`{new_string}`\n\n"
+                "Save this string! Add it to your `main.py` code later so you don't have to log in every time Koyeb restarts. "
+                "For now, you can immediately send `/start` to begin copying files!"
+            )
+            await conv.send_message(success_msg)
+            
+        except Exception as e:
+            await conv.send_message(f"❌ **Login Failed:** {e}\nSend `/login` to try again.")
+            user = None
+
+# --- Main Forwarding Command ---
+@bot.on(events.NewMessage(pattern='/start'))
+async def start_handler(event):
+    global user
+    chat_id = event.chat_id
+    
+    if user is None or not await user.is_user_authorized():
+        await bot.send_message(chat_id, "⚠️ **User Client is not logged in!**\nPlease send `/login` first to authenticate your account.")
+        return
+
     async with bot.conversation(chat_id) as conv:
         try:
             await conv.send_message("🛠 **Select Mode:**\nReply `1` for Entire Channel\nReply `2` for Single Message ID")
             mode = (await conv.get_response()).text.strip()
             
-            await conv.send_message("📂 **Source:** Enter Source Channel ID (e.g., -100123456789):")
+            await conv.send_message("📂 **Source:** Enter Source Channel ID (must start with -100):")
             src_id = int((await conv.get_response()).text.strip())
             
             await conv.send_message("🎯 **Destination:** Enter Destination Channel ID:")
@@ -94,58 +141,46 @@ async def handler(event):
                     if is_restricted:
                         start_time = time.time(); last_upd = [start_time]
                         path = await user.download_media(m, progress_callback=lambda c, t: progress_bar(c, t, status_msg, f"Downloading {i}", start_time, last_upd))
-                        
                         start_time = time.time(); last_upd = [start_time]
                         await user.send_file(dst_id, path, caption=m.text, progress_callback=lambda c, t: progress_bar(c, t, status_msg, f"Uploading {i}", start_time, last_upd))
-                        
                         if os.path.exists(path): os.remove(path)
                     else:
                         await user.forward_messages(dst_id, m)
-                    
                     await status_msg.edit(f"✅ File {i} transferred."); await asyncio.sleep(2)
                 except FloodWaitError as e:
                     await bot.send_message(chat_id, f"⚠️ Rate Limit! Sleeping {e.seconds}s..."); await asyncio.sleep(e.seconds)
                 except Exception as e:
                     await bot.send_message(chat_id, f"❌ Error: {e}")
-            
             await bot.send_message(chat_id, "🏁 **Transfer Complete!**")
         except Exception as e:
             await bot.send_message(chat_id, f"⚠️ Error: {e}")
 
-# --- Runner with Startup Protection ---
+# --- Background Services ---
 async def start_services():
-    # 1. Start Health Check server
+    global user
+    # Start Health Check
     threading.Thread(target=run_flask, daemon=True).start()
     print("✅ Health check server live on port 8000.")
 
-    # 2. Start Bot Client
-    try:
-        print("Attempting to start Bot Client...")
-        await bot.start(bot_token=BOT_TOKEN)
-        print("✅ Bot Client is Online.")
-    except Exception as e:
-        print(f"❌ CRITICAL: Bot startup failed: {e}")
-        return
+    # Start Bot Client
+    print("Attempting to start Bot Client...")
+    await bot.start(bot_token=BOT_TOKEN)
+    print("✅ Bot Client is Online.")
 
-    # 3. Start User Client (The Worker)
-    while True:
+    # Check if a String Session was hardcoded
+    if STRING_SESSION:
         try:
-            print("Attempting to start User Client...")
-            await user.start()
-            print("✅ User Client (Worker) is Online.")
-            break
-        except FloodWaitError as e:
-            print(f"⚠️ Telegram FloodWait: Waiting {e.seconds}s. DO NOT RESTART.")
-            await asyncio.sleep(e.seconds + 5)
+            print("String Session found, attempting to connect User Client...")
+            user = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+            await user.connect()
+            if await user.is_user_authorized():
+                print("✅ User Client is Online via hardcoded string.")
         except Exception as e:
-            print(f"❌ USER SESSION ERROR: {e}")
-            await asyncio.sleep(60)
+            print(f"⚠️ Hardcoded String Session failed: {e}")
 
-    print("🚀 ALL SYSTEMS ACTIVE. Send /start to your bot.")
+    print("🚀 Bot is ready. Send /login or /start on Telegram.")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(start_services())
-    except KeyboardInterrupt:
-        pass
+    try: asyncio.run(start_services())
+    except KeyboardInterrupt: pass
