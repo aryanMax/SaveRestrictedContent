@@ -22,8 +22,6 @@ def run_flask():
 API_ID = 12155241
 API_HASH = '5d4fb21990c47b88df74dc1611a07483'
 BOT_TOKEN = '8498132641:AAE-SV9DyRcn30SnTxC5CBjHc2F9XxswTag'
-
-# Fallback session
 STRING_SESSION = '1AZWarzkBuwgN4VaU0uTtr1QyMzMcR7g7aPuFeQscmSpdYw7Iquk3_JI1XxE4eUzHRGnOXhAW8tMLzNfVu8eLB7yLqjs69bWP6ML3pvQpjrQOi9aIMs39WAhfFEPrkMIyvI_JAtD4-zrjWVlh9KqmnWX4XXfhpz2276mJWW8cevVhkKBSnv3YXgVjAjNliS3zy1TTQO08wXw-efD0iMHyxo6Q9fvp1kEeUOPBqfLbRIfxKIgQjHCUANR46aepz9hm_Sq7j6VIu8wqM_jlbXA7z0upsswXyiKY3gA8HtSXxdXlrMKh9sv6u9xUSZILFAD9uAgN-fByvPR71lTuvwqdgRTQH2LOzHg='
 
 # --- Client Initialization ---
@@ -70,14 +68,21 @@ async def select_channel(conv, prompt_title):
     
     search_term = (await conv.get_response()).text.strip()
     
+    # Check if user pasted a raw ID
     if search_term.lstrip('-').isdigit():
-        return int(search_term)
+        entity_id = int(search_term)
+        try:
+            # Force Telethon to cache the entity to prevent "PeerUser" errors
+            await user.get_entity(entity_id)
+            return entity_id
+        except Exception as e:
+            await conv.send_message(f"❌ Error fetching ID `{entity_id}`. Make sure your personal account is a member of this channel!")
+            return None
         
     await conv.send_message("🔍 Searching your channels...")
     
     dialogs = await user.get_dialogs(limit=200)
     channels = [d for d in dialogs if d.is_channel or d.is_group]
-    
     matches = [c for c in channels if search_term.lower() in c.name.lower()]
     
     if not matches:
@@ -187,17 +192,27 @@ async def start_handler(event):
 
             # --- THE SPEED ENGINES ---
             if not is_restricted:
-                # SUPER FAST BATCH FORWARDING (Public Channels)
+                # PUBLIC CHANNEL BATCHING WITH FALLBACK
                 await conv.send_message(f"⚡️ Public Channel detected! Using **Batch Forwarding** for {len(messages_to_copy)} files...")
                 status_msg = await bot.send_message(chat_id, "Initializing rapid transfer...")
                 
-                chunk_size = 50 # Forward 50 files at the exact same time
+                chunk_size = 50 
                 for i in range(0, len(messages_to_copy), chunk_size):
                     chunk = messages_to_copy[i:i + chunk_size]
                     try:
                         await user.forward_messages(dst_id, chunk)
                         await status_msg.edit(f"⚡️ Sent {min(i + chunk_size, len(messages_to_copy))} / {len(messages_to_copy)} files.")
-                        await asyncio.sleep(2) # Brief pause to respect Telegram limits
+                        await asyncio.sleep(2) 
+                    except ValueError:
+                        # FALLBACK: If Telethon hits a ghost admin (PeerUser=1), it falls back to 1-by-1 copying
+                        for msg in chunk:
+                            try:
+                                await user.forward_messages(dst_id, msg)
+                            except ValueError:
+                                # Skips forwarding and just creates a direct copy to bypass the ghost ID
+                                await user.send_message(dst_id, msg.message, file=msg.media)
+                            await asyncio.sleep(0.5)
+                        await status_msg.edit(f"⚡️ Sent {min(i + chunk_size, len(messages_to_copy))} / {len(messages_to_copy)} files (Fallback Mode).")
                     except FloodWaitError as e:
                         await bot.send_message(chat_id, f"⚠️ Rate Limit! Sleeping {e.seconds}s...")
                         await asyncio.sleep(e.seconds)
@@ -243,34 +258,4 @@ async def start_services():
     print("✅ Health check server live on port 8000.")
 
     print("Attempting to start Bot Client...")
-    await bot.start(bot_token=BOT_TOKEN)
-    print("✅ Bot Client is Online.")
-
-    session_to_use = STRING_SESSION
-    if os.path.exists("session.txt"):
-        with open("session.txt", "r") as f:
-            saved_session = f.read().strip()
-            if saved_session:
-                session_to_use = saved_session
-
-    try:
-        print("Attempting to connect User Client...")
-        user = TelegramClient(StringSession(session_to_use), API_ID, API_HASH)
-        await user.connect()
-        
-        if await user.is_user_authorized():
-            print("✅ User Client (Worker) is Online and Authorized.")
-        else:
-            print("⚠️ User Session is invalid. Bot will ask for a new one via /start.")
-    except Exception as e:
-        print(f"⚠️ USER SESSION ERROR: {e}")
-        print("⚠️ Bot will ask for a new session via /start.")
-
-    print("🚀 Bot is ready. Send /start on Telegram.")
-    await bot.run_until_disconnected()
-
-if __name__ == '__main__':
-    try: 
-        asyncio.run(start_services())
-    except KeyboardInterrupt: 
-        pass
+    await bot.start(
